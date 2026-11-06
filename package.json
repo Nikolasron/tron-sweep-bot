@@ -1,0 +1,12 @@
+{
+  "name": "tron-sweep-bot",
+  "version": "1.0.0",
+  "description": "TronLink Auto-Sweeper",
+  "main": "index.html",
+  "scripts": {
+    "start": "npx serve ."
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT"
+}
